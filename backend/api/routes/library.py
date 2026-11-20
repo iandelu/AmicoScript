@@ -19,7 +19,7 @@ from exports import format_md_bulk, render_export
 from fastapi import APIRouter, Depends, Form, HTTPException
 from pydantic import BaseModel
 from fastapi.responses import FileResponse, StreamingResponse
-from models import Analysis, Folder, Recording, RecordingTag, Tag, Transcript, TranscriptChunk
+from models import Analysis, IdeaDecision, Folder, Recording, RecordingTag, Tag, Transcript, TranscriptChunk
 from sqlmodel import Session, select
 from utils.logging_utils import get_logger
 
@@ -192,6 +192,8 @@ def delete_recording(recording_id: str, session: Session = Depends(get_session))
     from core.visual_ideas import delete_visual_evidence
     analysis_ids = []
     for an in session.exec(select(Analysis).where(Analysis.recording_id == recording_id)).all():
+        for decision in session.exec(select(IdeaDecision).where(IdeaDecision.analysis_id == an.id)).all():
+            session.delete(decision)
         analysis_ids.append(an.id)
         session.delete(an)
     # A leftover chunk would be retrievable, and an answer could cite a

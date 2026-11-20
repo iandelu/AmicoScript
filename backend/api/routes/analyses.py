@@ -7,7 +7,10 @@ from llm_providers import refusal_reason
 from db import get_session
 from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import FileResponse
-from models import Analysis, Recording, Transcript
+from models import Analysis, IdeaDecision, Recording, Transcript
+from pydantic import BaseModel
+from typing import Literal
+import re
 from settings import get_llm_settings
 from sqlmodel import Session, select
 
@@ -65,7 +68,7 @@ async def create_analysis(
         except (ValueError, TypeError):
             transcript_text = tr.full_text
         custom_prompt = ('Extrae ideas distintas y realmente útiles, no un resumen. Cada idea debe ocupar como máximo 5 a 10 líneas, '
-                         'con título, explicación y cuándo usarla si aplica. Indica marcas temporales de audio '
+                         'con título breve y una sola frase concreta de máximo 30 palabras; añade cuándo usarla solo si aporta valor. Indica marcas temporales de audio '
                          'o fotogramas como evidencia; distingue lo dicho de lo visible y no inventes. Los fotogramas '
                          'son solo tres muestras y no representan todo el vídeo. Atribuye las afirmaciones al vídeo, '
                          'no las presentes como hechos comprobados. No inventes nombres, cifras, siglas ni usos. '
@@ -133,6 +136,8 @@ def delete_analysis(recording_id: str, analysis_id: str, session: Session = Depe
     a = session.get(Analysis, analysis_id)
     if not a or a.recording_id != recording_id:
         raise HTTPException(404, "Analysis not found")
+    for decision in session.exec(select(IdeaDecision).where(IdeaDecision.analysis_id == analysis_id)).all():
+        session.delete(decision)
     session.delete(a)
     session.commit()
     from core.visual_ideas import delete_visual_evidence
@@ -162,3 +167,61 @@ def get_analysis_frame(recording_id: str, analysis_id: str, index: int, session:
     if not path.is_file():
         raise HTTPException(404, 'Frame not found')
     return FileResponse(path, media_type='image/jpeg')
+
+
+def _review_analysis(recording_id, analysis_id, session):
+    analysis = session.get(Analysis, analysis_id)
+    if not analysis or analysis.recording_id != recording_id:
+        raise HTTPException(404, 'Analysis not found')
+    return analysis
+
+
+class IdeaStatus(BaseModel):
+    status: Literal['pending', 'approved', 'rejected']
+
+
+@router.get('/api/recordings/{recording_id}/analyses/{analysis_id}/ideas')
+def get_ideas(recording_id: str, analysis_id: str, session: Session = Depends(get_session)):
+    from core.idea_review import parse_ideas
+    analysis = _review_analysis(recording_id, analysis_id, session)
+    decisions = {d.idea_id: d.status for d in session.exec(select(IdeaDecision).where(IdeaDecision.analysis_id == analysis_id)).all()}
+    return [{**idea, 'status': decisions.get(idea['id'], 'pending')} for idea in parse_ideas(analysis_id, analysis.result_text)]
+
+
+@router.put('/api/recordings/{recording_id}/analyses/{analysis_id}/ideas/{idea_id}')
+def set_idea_status(recording_id: str, analysis_id: str, idea_id: str, data: IdeaStatus, session: Session = Depends(get_session)):
+    from core.idea_review import parse_ideas
+    analysis = _review_analysis(recording_id, analysis_id, session)
+    if idea_id not in {i['id'] for i in parse_ideas(analysis_id, analysis.result_text)}:
+        raise HTTPException(404, 'Idea not found')
+    decision = session.get(IdeaDecision, (analysis_id, idea_id))
+    if data.status == 'pending':
+        if decision:
+            session.delete(decision)
+    else:
+        if not decision:
+            decision = IdeaDecision(analysis_id=analysis_id, idea_id=idea_id)
+        decision.status = data.status
+        session.add(decision)
+    session.commit()
+    return {'id': idea_id, 'status': data.status}
+
+
+@router.get('/api/recordings/{recording_id}/analyses/{analysis_id}/video')
+def get_visual_video(recording_id: str, analysis_id: str, session: Session = Depends(get_session)):
+    from core.visual_ideas import visual_video_path
+    _review_analysis(recording_id, analysis_id, session)
+    path = visual_video_path(analysis_id)
+    if not path:
+        raise HTTPException(404, 'Video not found')
+    return FileResponse(path)
+
+
+@router.get('/api/recordings/{recording_id}/analyses/{analysis_id}/visual-source')
+def get_visual_source(recording_id: str, analysis_id: str, session: Session = Depends(get_session)):
+    from core.visual_ideas import read_visual_source, visual_video_path
+    analysis = _review_analysis(recording_id, analysis_id, session)
+    source = read_visual_source(analysis_id)
+    match = re.search(r'Fuente facilitada por el usuario: (https://\S+)', analysis.prompt_used or '')
+    url = source.get('url') or (match.group(1) if match else '')
+    return {'url': url if validate_source_url(url) else '', 'has_video': bool(visual_video_path(analysis_id))}

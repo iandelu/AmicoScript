@@ -8,6 +8,7 @@ import { showError } from './exports.js';
 import { fetchFolders } from './folders.js';
 import { state } from './state.js';
 import { switchTab } from './tabs.js';
+import { loadIdeaReview } from './idea-review.js';
 import { fetchTags } from './tags.js';
 import { applyFilters, escHtml, fmtDur, renderResults } from './transcript.js';
 import { clientLog } from './upload.js';
@@ -620,6 +621,7 @@ export async function openRecording(rec, silent = false) {
     if (_legacyPast) _legacyPast.classList.add('hidden');
 
     renderResults();
+    loadIdeaReview(rec.id);
 
     const transcriptBtn = document.getElementById('tab-btn-transcript');
     transcriptBtn.disabled = false;

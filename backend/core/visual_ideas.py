@@ -81,7 +81,31 @@ def video_duration(info, video):
     return float(result.stdout.strip())
 
 
-def collect_visual_evidence(url, cancelled=lambda: False):
+def save_visual_video(analysis_id, video, source_url):
+    video = Path(video)
+    if video.suffix.lower() not in {'.mp4', '.webm', '.mkv'}:
+        raise ValueError('Unsupported video format')
+    directory = _evidence_dir(analysis_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    name = 'video' + video.suffix.lower()
+    shutil.copyfile(video, directory / name)
+    (directory / 'source.json').write_text(json.dumps({'url': source_url, 'video': name}), encoding='utf-8')
+
+
+def read_visual_source(analysis_id):
+    path = _evidence_dir(analysis_id) / 'source.json'
+    return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+
+
+def visual_video_path(analysis_id):
+    name = read_visual_source(analysis_id).get('video', '')
+    if name not in {'video.mp4', 'video.webm', 'video.mkv'}:
+        return None
+    path = _evidence_dir(analysis_id) / name
+    return path if path.is_file() else None
+
+
+def collect_visual_evidence(url, cancelled=lambda: False, analysis_id=None):
     if not validate_source_url(url):
         raise ValueError('Use an HTTPS YouTube, Instagram or TikTok URL.')
     # Endpoint and model are operator-configured, never supplied by a request.
@@ -90,11 +114,13 @@ def collect_visual_evidence(url, cancelled=lambda: False):
     if urlparse(endpoint).hostname not in {'localhost', '127.0.0.1', 'host.docker.internal'}:
         raise ValueError('Visual analysis requires a local Ollama endpoint.')
     with tempfile.TemporaryDirectory(prefix='amicoscript-frames-') as tmp:
-        opts = {'outtmpl': str(Path(tmp) / 'video.%(ext)s'), 'format': 'bestvideo[height<=720]/best[height<=720]/best',
+        opts = {'outtmpl': str(Path(tmp) / 'video.%(ext)s'), 'format': 'best[height<=720]/bestvideo[height<=720]+bestaudio/best',
                 'noplaylist': True, 'quiet': True, 'max_filesize': 300 * 1024 * 1024}
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             video = Path(ydl.prepare_filename(info))
+        if not video.is_file():
+            video = next((p for p in Path(tmp).glob('video.*') if p.suffix.lower() in {'.mp4', '.webm', '.mkv'}), video)
         if not video.is_file():
             raise RuntimeError('The source video could not be downloaded.')
         duration = video_duration(info, video)
@@ -120,4 +146,6 @@ def collect_visual_evidence(url, cancelled=lambda: False):
             if not description:
                 raise RuntimeError('The vision model returned an empty description.')
             evidence.append({'second': second, 'description': description, 'image': image.read_bytes()})
+        if analysis_id:
+            save_visual_video(analysis_id, video, url)
         return evidence

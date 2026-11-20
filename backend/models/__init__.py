@@ -100,3 +100,9 @@ class WatcherState(SQLModel, table=True):
 
     id: str = Field(default="singleton", primary_key=True)
     started_at: Optional[float] = None
+
+
+class IdeaDecision(SQLModel, table=True):
+    analysis_id: str = Field(foreign_key="analysis.id", primary_key=True)
+    idea_id: str = Field(primary_key=True)
+    status: str = Field(default="pending")

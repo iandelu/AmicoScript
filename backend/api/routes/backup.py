@@ -34,7 +34,7 @@ from api.routes.releases import get_version
 from db import get_session
 from storage import get_recording_audio_path
 from http_utils import content_disposition_attachment
-from models import Analysis, Folder, Recording, RecordingTag, Tag, Transcript
+from models import Analysis, IdeaDecision, Folder, Recording, RecordingTag, Tag, Transcript
 
 router = APIRouter()
 
@@ -78,6 +78,9 @@ def _collect_library(session: Session, ids: list[str] | None) -> dict:
     else:
         transcripts, analyses, links = [], [], []
 
+    analysis_ids = [a.id for a in analyses]
+    decisions = session.exec(select(IdeaDecision).where(IdeaDecision.analysis_id.in_(analysis_ids))).all() if analysis_ids else []
+
     # Folders and tags travel whole: a partial export that dropped the folder a
     # recording points at would import as an orphan.
     folders = session.exec(select(Folder)).all()
@@ -90,6 +93,7 @@ def _collect_library(session: Session, ids: list[str] | None) -> dict:
         "recording_tags": _rows_to_dicts(links),
         "transcripts": _rows_to_dicts(transcripts),
         "analyses": _rows_to_dicts(analyses),
+        "idea_decisions": _rows_to_dicts(decisions),
     }
 
 
@@ -261,6 +265,7 @@ _IMPORT_ORDER = [
     ("recordings", Recording, ("id",)),
     ("transcripts", Transcript, ("id",)),
     ("analyses", Analysis, ("id",)),
+    ("idea_decisions", IdeaDecision, ("analysis_id", "idea_id")),
     ("recording_tags", RecordingTag, ("recording_id", "tag_id")),
 ]
 

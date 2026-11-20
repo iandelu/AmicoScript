@@ -387,7 +387,7 @@ def process_analysis_job(job_id: str) -> None:
         if opts.get('visual_source_url'):
             from core.visual_ideas import collect_visual_evidence, save_visual_evidence
             push_event(job_id, 'running', 0.06, 'Analizando fotogramas en local...')
-            visual = collect_visual_evidence(opts['visual_source_url'], _cancelled)
+            visual = collect_visual_evidence(opts['visual_source_url'], _cancelled, analysis_id)
             save_visual_evidence(analysis_id, visual)
             visual_text = '\n'.join(f'[{int(item["second"] // 60):02}:{int(item["second"] % 60):02}] {item["description"]}' for item in visual)
             opts = dict(opts)
