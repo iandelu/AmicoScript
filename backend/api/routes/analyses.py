@@ -6,6 +6,7 @@ import json
 from llm_providers import refusal_reason
 from db import get_session
 from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi.responses import FileResponse
 from models import Analysis, Recording, Transcript
 from settings import get_llm_settings
 from sqlmodel import Session, select
@@ -66,7 +67,9 @@ async def create_analysis(
         custom_prompt = ('Extrae ideas distintas y realmente útiles, no un resumen. Cada idea debe ocupar como máximo 5 a 10 líneas, '
                          'con título, explicación y cuándo usarla si aplica. Indica marcas temporales de audio '
                          'o fotogramas como evidencia; distingue lo dicho de lo visible y no inventes. Los fotogramas '
-                         'son solo tres muestras y no representan todo el vídeo. '
+                         'son solo tres muestras y no representan todo el vídeo. Atribuye las afirmaciones al vídeo, '
+                         'no las presentes como hechos comprobados. No inventes nombres, cifras, siglas ni usos. '
+                         'Usa un encabezado Markdown por idea y omite introducción y conclusiones. '
                          'Las ideas son propuestas pendientes de aprobación humana. '
                          f'Fuente facilitada por el usuario: {source_url.strip()}')
         visual_source_url = source_url.strip()
@@ -132,4 +135,30 @@ def delete_analysis(recording_id: str, analysis_id: str, session: Session = Depe
         raise HTTPException(404, "Analysis not found")
     session.delete(a)
     session.commit()
+    from core.visual_ideas import delete_visual_evidence
+    delete_visual_evidence(analysis_id)
     return {"ok": True}
+
+
+@router.get('/api/recordings/{recording_id}/analyses/{analysis_id}/frames')
+def list_analysis_frames(recording_id: str, analysis_id: str, session: Session = Depends(get_session)) -> list:
+    analysis = session.get(Analysis, analysis_id)
+    if not analysis or analysis.recording_id != recording_id:
+        raise HTTPException(404, 'Analysis not found')
+    from core.visual_ideas import read_visual_evidence
+    return read_visual_evidence(analysis_id)
+
+
+@router.get('/api/recordings/{recording_id}/analyses/{analysis_id}/frames/{index}')
+def get_analysis_frame(recording_id: str, analysis_id: str, index: int, session: Session = Depends(get_session)):
+    analysis = session.get(Analysis, analysis_id)
+    if not analysis or analysis.recording_id != recording_id:
+        raise HTTPException(404, 'Analysis not found')
+    from core.visual_ideas import visual_frame_path
+    try:
+        path = visual_frame_path(analysis_id, index)
+    except ValueError:
+        raise HTTPException(404, 'Frame not found')
+    if not path.is_file():
+        raise HTTPException(404, 'Frame not found')
+    return FileResponse(path, media_type='image/jpeg')

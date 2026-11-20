@@ -189,7 +189,10 @@ def delete_recording(recording_id: str, session: Session = Depends(get_session))
         session.delete(link)
     for tr in session.exec(select(Transcript).where(Transcript.recording_id == recording_id)).all():
         session.delete(tr)
+    from core.visual_ideas import delete_visual_evidence
+    analysis_ids = []
     for an in session.exec(select(Analysis).where(Analysis.recording_id == recording_id)).all():
+        analysis_ids.append(an.id)
         session.delete(an)
     # A leftover chunk would be retrievable, and an answer could cite a
     # recording that no longer opens.
@@ -200,6 +203,9 @@ def delete_recording(recording_id: str, session: Session = Depends(get_session))
 
     session.delete(rec)
     session.commit()
+
+    for analysis_id in analysis_ids:
+        delete_visual_evidence(analysis_id)
 
     # Delete the file after successful DB commit
     try:

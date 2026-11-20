@@ -1,18 +1,51 @@
 """Local-only visual evidence for transcript analysis."""
 import base64
+import json
 import math
 import os
+import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+import config
 from yt_dlp import YoutubeDL
 
 _HOSTS = {'youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be',
           'instagram.com', 'www.instagram.com', 'tiktok.com', 'www.tiktok.com',
           'm.tiktok.com', 'vm.tiktok.com'}
+
+
+def _evidence_dir(analysis_id):
+    return config.STORAGE_ROOT / 'visual-evidence' / str(uuid.UUID(analysis_id))
+
+
+def save_visual_evidence(analysis_id, frames):
+    directory = _evidence_dir(analysis_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    metadata = []
+    for index, frame in enumerate(frames):
+        (directory / f'{index}.jpg').write_bytes(frame['image'])
+        metadata.append({'second': frame['second'], 'description': frame['description']})
+    (directory / 'frames.json').write_text(json.dumps(metadata, ensure_ascii=False), encoding='utf-8')
+
+
+def read_visual_evidence(analysis_id):
+    path = _evidence_dir(analysis_id) / 'frames.json'
+    return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else []
+
+
+def visual_frame_path(analysis_id, index):
+    if index < 0 or index >= 3:
+        raise ValueError('Invalid frame index')
+    return _evidence_dir(analysis_id) / f'{index}.jpg'
+
+
+def delete_visual_evidence(analysis_id):
+    shutil.rmtree(_evidence_dir(analysis_id), ignore_errors=True)
 
 
 def validate_source_url(url):
@@ -86,5 +119,5 @@ def collect_visual_evidence(url, cancelled=lambda: False):
             description = response.json().get('message', {}).get('content', '').strip()
             if not description:
                 raise RuntimeError('The vision model returned an empty description.')
-            evidence.append({'second': second, 'description': description})
+            evidence.append({'second': second, 'description': description, 'image': image.read_bytes()})
         return evidence

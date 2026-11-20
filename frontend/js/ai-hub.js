@@ -55,9 +55,10 @@ function _setMode(mode) {
 // ---------------------------------------------------------------------------
 function _updateContextLabel() {
   if (!_contextLabel) return;
-  const rec = state.currentRecording || (state.result ? { title: 'Current recording' } : null);
+  const id = state.activeRecordingId || state.recordingId;
+  const rec = state.library?.recordings?.find(item => item.id === id) || state.currentRecording || (id ? { title: 'Recording' } : null);
   if (_currentMode === 'analyze') {
-    _contextLabel.textContent = rec ? `Analyzing: ${rec.title || 'Recording'}` : 'No recording loaded';
+    _contextLabel.textContent = rec ? `Analizando: ${rec.alias || rec.filename || rec.title || 'grabación'}` : 'Abre una grabación';
   } else {
     _contextLabel.textContent = 'Ask across your entire library';
   }
@@ -152,7 +153,7 @@ function _addMessage(role, html, opts = {}) {
 function _updateLastMessage(html, opts = {}) {
   if (!_messagesEl) return;
   const bubbles = _messagesEl.querySelectorAll('[data-message-id]');
-  const last = bubbles[bubbles.length - 1];
+  const last = opts.id ? Array.from(bubbles).find(bubble => bubble.dataset.messageId === opts.id) : bubbles[bubbles.length - 1];
   if (!last) return;
   if (opts.spinner) {
     last.innerHTML = `<div class="flex items-center gap-2 text-slate-400">
@@ -251,14 +252,14 @@ async function _runAnalysis() {
   try {
     const res = await fetch(`/api/recordings/${recId}/analyses`, { method: 'POST', body: fd });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Failed');
-    const { job_id } = await res.json();
-    _connectAnalysisSSE(job_id, msgId, recId);
+    const { job_id, analysis_id } = await res.json();
+    _connectAnalysisSSE(job_id, msgId, recId, type, analysis_id);
   } catch (err) {
     _updateLastMessage(`<span class="text-red-500">Error: ${escHtml(err.message)}</span>`, { id: msgId });
   }
 }
 
-function _connectAnalysisSSE(jobId, msgId, recId) {
+function _connectAnalysisSSE(jobId, msgId, recId, type, analysisId) {
   _analysisJobId = jobId;
   _rawAiText = '';
   const es = new EventSource(`/api/jobs/${jobId}/stream`);
@@ -276,7 +277,12 @@ function _connectAnalysisSSE(jobId, msgId, recId) {
       es.close();
       _analysisJobId = null;
       _analysisES = null;
-      _updateLastMessage(marked.parse(_rawAiText || data.data?.result_text || ''), { id: msgId });
+      const result = _rawAiText || data.data?.result_text || '';
+      if (type === 'visual_ideas') {
+        _showVisualResult(msgId, recId, analysisId, result);
+      } else {
+        _updateLastMessage(marked.parse(result), { id: msgId });
+      }
       clientLog('AI analysis complete');
       _loadPastAnalyses(recId);
     } else if (data.status === 'error') {
@@ -289,6 +295,8 @@ function _connectAnalysisSSE(jobId, msgId, recId) {
       _analysisJobId = null;
       _analysisES = null;
       _updateLastMessage(_rawAiText ? marked.parse(_rawAiText) : '<em>Cancelled</em>', { id: msgId });
+    } else if (data.status === 'running' && data.message) {
+      _updateLastMessage('', { id: msgId, spinner: data.message });
     }
   };
   es.onerror = () => {
@@ -297,6 +305,63 @@ function _connectAnalysisSSE(jobId, msgId, recId) {
     _analysisES = null;
     _updateLastMessage(_rawAiText ? marked.parse(_rawAiText) : '<em>Connection lost</em>', { id: msgId });
   };
+}
+
+function _ideaCards(text) {
+  const cleaned = text.replace(/^\s*[-*_]{3,}\s*$/gm, '').trim();
+  const parts = cleaned.split(/(?=^#{1,4}\s+|^\d+[.)]\s+)/gm).map(part => part.trim()).filter(Boolean);
+  if (parts.length > 1 && !/^(#{1,4}\s+|\d+[.)]\s+)/.test(parts[0])) parts.shift();
+  return parts.map(part => {
+    const lines = part.split('\n');
+    const title = lines.shift().replace(/^#{1,6}\s*/, '').replace(/^\d+[.)]\s*/, '').replace(/\*\*/g, '');
+    const body = lines.join('\n').trim().replace(/\*\*/g, '').replace(/^\s*[*-]\s+/gm, '• ').replace(/(^|\s)\*([^*\n]+)\*(?=\s|$)/g, '$1$2');
+    const excerpt = body.replace(/\s+/g, ' ').slice(0, 200);
+    return `<article class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3"><h4 class="font-semibold text-slate-800">${escHtml(title)}</h4>${body ? `<p class="mt-2 text-sm leading-5 text-slate-700">${escHtml(excerpt)}${body.length > 200 ? '…' : ''}</p><details class="mt-2"><summary class="cursor-pointer text-xs font-medium text-indigo-700">Ver detalle y evidencia</summary><p class="mt-2 whitespace-pre-wrap text-sm leading-5 text-slate-700">${escHtml(body)}</p></details>` : ''}</article>`;
+  }).join('');
+}
+
+async function _showVisualResult(msgId, recId, analysisId, text) {
+  const base = `/api/recordings/${encodeURIComponent(recId)}/analyses/${encodeURIComponent(analysisId)}/frames`;
+  let frames = [];
+  let framesError = false;
+  try {
+    const response = await fetch(base);
+    if (!response.ok) throw new Error('No se han podido cargar los fotogramas.');
+    frames = await response.json();
+  } catch { framesError = true; }
+  const framesHtml = frames.length ? `<div class="grid grid-cols-3 gap-2">${frames.map((frame, index) => {
+    const seconds = Math.floor(frame.second);
+    const timestamp = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    return `<figure class="min-w-0"><a href="${base}/${index}" target="_blank" rel="noopener" aria-label="Ampliar fotograma del minuto ${timestamp}"><img class="w-full h-32 object-contain rounded-md bg-slate-100" src="${base}/${index}" alt="Fotograma del minuto ${timestamp}" loading="lazy"></a><figcaption class="mt-1 text-xs text-slate-600">${timestamp}</figcaption></figure>`;
+  }).join('')}</div>` : `<p class="text-sm text-slate-600">${framesError ? 'No se han podido cargar los fotogramas. Vuelve a intentarlo.' : 'Este análisis no tiene fotogramas guardados. Ejecuta uno nuevo para verlos.'}</p>`;
+  _updateLastMessage(`<div class="space-y-4"><section><h3 class="font-semibold text-slate-800 mb-2">Fotogramas analizados</h3>${framesHtml}<p class="mt-2 text-xs text-slate-600">Son tres momentos del vídeo, no una revisión de todos los fotogramas.</p></section><section><h3 class="font-semibold text-slate-800 mb-2">Ideas propuestas</h3><div class="space-y-2">${_ideaCards(text)}</div><p class="mt-2 text-xs text-slate-600">Revisa las ideas y sus referencias antes de guardarlas.</p></section></div>`, { id: msgId });
+  const bubble = Array.from(_messagesEl.querySelectorAll('[data-message-id]')).find(item => item.dataset.messageId === msgId);
+  if (bubble) bubble.scrollIntoView({ block: 'start' });
+}
+
+async function _showLatestVisualAnalysis() {
+  const recId = state.activeRecordingId || state.recordingId;
+  if (!recId) { _addMessage('assistant', 'Abre primero una grabación en la biblioteca.'); return; }
+  _setAnalyzeType('visual_ideas');
+  const msgId = 'visual-' + Date.now();
+  _addMessage('assistant', '', { id: msgId, spinner: 'Buscando el análisis…' });
+  try {
+    const response = await fetch(`/api/recordings/${encodeURIComponent(recId)}/analyses`);
+    if (!response.ok) throw new Error('No se pueden consultar los análisis.');
+    const analyses = await response.json();
+    for (const analysis of analyses) {
+      if (analysis.status !== 'done') continue;
+      const frames = await fetch(`/api/recordings/${encodeURIComponent(recId)}/analyses/${encodeURIComponent(analysis.id)}/frames`);
+      if (!frames.ok) throw new Error('No se han podido consultar los fotogramas.');
+      if ((await frames.json()).length) {
+        await _showVisualResult(msgId, recId, analysis.id, analysis.result_text);
+        return;
+      }
+    }
+    _updateLastMessage('Todavía no hay un análisis con fotogramas guardados para esta grabación.', { id: msgId });
+  } catch (err) {
+    _updateLastMessage(`<span class="text-red-600">${escHtml(err.message)}</span>`, { id: msgId });
+  }
 }
 
 function _stopAnalysis() {
@@ -418,6 +483,7 @@ function _renderInputArea() {
         <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2zm-1 14.5v-9l6 4.5-6 4.5z"/></svg>
         Run Analysis
       </button>
+      <button type="button" id="ai-hub-view-visual" class="w-full text-xs font-medium px-3 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand">Ver último análisis con fotogramas</button>
       <p id="ai-hub-past-hint" class="hidden text-[10px] text-slate-400 text-center"></p>
     `;
     _inputWrap.appendChild(controls);
@@ -426,6 +492,7 @@ function _renderInputArea() {
       b.addEventListener('click', () => _setAnalyzeType(b.dataset.type));
     });
     document.getElementById('ai-hub-run-btn').addEventListener('click', _runAnalysis);
+    document.getElementById('ai-hub-view-visual').addEventListener('click', _showLatestVisualAnalysis);
     _setAnalyzeType(_analyzeType);
   } else {
     const form = document.createElement('form');
@@ -467,7 +534,7 @@ function _buildDom() {
   // Panel
   const panel = document.createElement('div');
   panel.id = 'ai-hub-panel';
-  panel.className = 'hidden fixed right-5 z-[60] w-[420px] max-w-[92vw] h-[560px] max-h-[75vh] flex flex-col bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden';
+  panel.className = 'hidden fixed right-5 z-[60] w-[480px] max-w-[92vw] h-[680px] max-h-[85vh] flex flex-col bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden';
   panel.style.bottom = 'calc(var(--console-h, 36px) + 4.5rem)';
   panel.innerHTML = `
     <!-- Header -->
