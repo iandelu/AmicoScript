@@ -1,6 +1,8 @@
 """Analysis endpoints."""
 
 from core.analysis_jobs import create_analysis_job
+from core.visual_ideas import validate_source_url, transcript_with_timestamps
+import json
 from llm_providers import refusal_reason
 from db import get_session
 from fastapi import APIRouter, Depends, Form, HTTPException
@@ -18,6 +20,7 @@ async def create_analysis(
     target_language: str = Form(""),
     custom_prompt: str = Form(""),
     output_language: str = Form(""),
+    source_url: str = Form(""),
     session: Session = Depends(get_session),
 ) -> dict:
     rec = session.get(Recording, recording_id)
@@ -40,23 +43,47 @@ async def create_analysis(
     custom_prompt = custom_prompt.strip()
     output_language = output_language.strip()
 
-    supported_analysis_types = {"summary", "action_items", "translate", "custom"}
+    supported_analysis_types = {"summary", "action_items", "translate", "custom", "visual_ideas"}
     if analysis_type not in supported_analysis_types:
-        raise HTTPException(400, "Invalid analysis_type. Supported values are: summary, action_items, translate, custom.")
+        raise HTTPException(400, "Invalid analysis_type. Supported values are: summary, action_items, translate, custom, visual_ideas.")
     if analysis_type == "custom" and not custom_prompt:
         raise HTTPException(400, "custom_prompt is required when analysis_type is 'custom'.")
     if analysis_type == "translate" and not target_language:
         raise HTTPException(400, "target_language is required when analysis_type is 'translate'.")
 
+    visual_source_url = ''
+    if analysis_type == 'visual_ideas':
+        if not validate_source_url(source_url.strip()):
+            raise HTTPException(400, 'A valid HTTPS YouTube, Instagram or TikTok URL is required.')
+        # Visual evidence and the transcript stay on the local Ollama server.
+        from urllib.parse import urlparse
+        if urlparse(cfg.get('llm_base_url', '')).hostname not in {'localhost', '127.0.0.1', 'host.docker.internal'}:
+            raise HTTPException(400, 'Visual ideas require a local Ollama server.')
+        try:
+            transcript_text = transcript_with_timestamps(json.loads(tr.json_data), tr.full_text)
+        except (ValueError, TypeError):
+            transcript_text = tr.full_text
+        custom_prompt = ('Extrae ideas distintas y realmente útiles, no un resumen. Cada idea debe ocupar como máximo 5 a 10 líneas, '
+                         'con título, explicación y cuándo usarla si aplica. Indica marcas temporales de audio '
+                         'o fotogramas como evidencia; distingue lo dicho de lo visible y no inventes. Los fotogramas '
+                         'son solo tres muestras y no representan todo el vídeo. '
+                         'Las ideas son propuestas pendientes de aprobación humana. '
+                         f'Fuente facilitada por el usuario: {source_url.strip()}')
+        visual_source_url = source_url.strip()
+        analysis_type = 'custom'
+    else:
+        transcript_text = tr.full_text
+
     job_id, analysis_id = create_analysis_job(
         recording_id=recording_id,
         analysis_type=analysis_type,
-        transcript_full_text=tr.full_text,
+        transcript_full_text=transcript_text,
         filename=rec.filename,
         file_path=rec.file_path,
         target_language=target_language,
         custom_prompt=custom_prompt,
         output_language=output_language,
+        visual_source_url=visual_source_url,
     )
     return {"job_id": job_id, "analysis_id": analysis_id}
 

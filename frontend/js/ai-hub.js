@@ -209,8 +209,10 @@ function _setAnalyzeType(type) {
   });
   const langRow = document.getElementById('ai-hub-lang-row');
   const customRow = document.getElementById('ai-hub-custom-row');
+  const videoRow = document.getElementById('ai-hub-video-row');
   if (langRow) langRow.classList.toggle('hidden', type !== 'translate');
   if (customRow) customRow.classList.toggle('hidden', type !== 'custom');
+  if (videoRow) videoRow.classList.toggle('hidden', type !== 'visual_ideas');
 }
 
 async function _runAnalysis() {
@@ -229,6 +231,11 @@ async function _runAnalysis() {
 
   const fd = new FormData();
   fd.append('analysis_type', type);
+  if (type === 'visual_ideas') {
+    const source = document.getElementById('ai-hub-video-url')?.value.trim();
+    if (!source) { _updateLastMessage('<em>Introduce el enlace original del vídeo.</em>', { id: msgId }); return; }
+    fd.append('source_url', source);
+  }
   if (type === 'translate') {
     const target = document.getElementById('ai-hub-target-lang')?.value.trim() || 'English';
     fd.append('target_language', target);
@@ -269,7 +276,7 @@ function _connectAnalysisSSE(jobId, msgId, recId) {
       es.close();
       _analysisJobId = null;
       _analysisES = null;
-      _updateLastMessage(marked.parse(_rawAiText), { id: msgId });
+      _updateLastMessage(marked.parse(_rawAiText || data.data?.result_text || ''), { id: msgId });
       clientLog('AI analysis complete');
       _loadPastAnalyses(recId);
     } else if (data.status === 'error') {
@@ -395,12 +402,17 @@ function _renderInputArea() {
         <button type="button" data-type="action_items" class="ai-hub-type-btn px-2.5 py-1 rounded-md text-xs font-medium border transition">Action Items</button>
         <button type="button" data-type="translate" class="ai-hub-type-btn px-2.5 py-1 rounded-md text-xs font-medium border transition">Translate</button>
         <button type="button" data-type="custom" class="ai-hub-type-btn px-2.5 py-1 rounded-md text-xs font-medium border transition">Custom</button>
+        <button type="button" data-type="visual_ideas" class="ai-hub-type-btn px-2.5 py-1 rounded-md text-xs font-medium border transition">Ideas + fotogramas</button>
       </div>
       <div id="ai-hub-lang-row" class="hidden">
         <input id="ai-hub-target-lang" type="text" placeholder="Target language…" class="w-full text-xs rounded-md border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand" />
       </div>
       <div id="ai-hub-custom-row" class="hidden">
         <textarea id="ai-hub-custom-prompt" rows="2" placeholder="Your instructions for the LLM…" class="w-full text-xs rounded-md border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand resize-none"></textarea>
+      </div>
+      <div id="ai-hub-video-row" class="hidden">
+        <input id="ai-hub-video-url" type="url" placeholder="Enlace del vídeo de esta grabación" class="w-full text-xs rounded-md border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand" />
+        <p class="text-xs text-slate-500 mt-1">Analiza la transcripción y tres fotogramas con IA local. El vídeo se descarga temporalmente.</p>
       </div>
       <button type="button" id="ai-hub-run-btn" class="w-full flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-hover transition disabled:opacity-40">
         <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2zm-1 14.5v-9l6 4.5-6 4.5z"/></svg>
