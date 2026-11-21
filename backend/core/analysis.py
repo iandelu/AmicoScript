@@ -385,14 +385,37 @@ def process_analysis_job(job_id: str) -> None:
 
         context_tokens = int(opts.get("llm_context_tokens") or 8192)
         if opts.get('visual_source_url'):
-            from core.visual_ideas import collect_visual_evidence, save_visual_evidence, read_visual_source
-            push_event(job_id, 'running', 0.06, 'Analizando fotogramas en local...')
-            visual = collect_visual_evidence(opts['visual_source_url'], _cancelled, analysis_id)
+            from core.visual_ideas import collect_visual_evidence, collect_carousel_evidence, is_tiktok_carousel, save_visual_evidence, read_visual_source
+            carousel = is_tiktok_carousel(opts['visual_source_url'])
+            push_event(job_id, 'running', 0.06, 'Analizando diapositivas en local...' if carousel else 'Analizando fotogramas en local...')
+            visual = (collect_carousel_evidence if carousel else collect_visual_evidence)(opts['visual_source_url'], _cancelled, analysis_id)
             save_visual_evidence(analysis_id, visual)
-            visual_text = '\n'.join(f'[{int(item["second"] // 60):02}:{int(item["second"] % 60):02}] {item["description"]}' for item in visual)
+            visual_text = '\n'.join((f'[Diapositiva {item["slide"]}] ' if carousel else f'[{int(item["second"] // 60):02}:{int(item["second"] % 60):02}] ') + item['description'] for item in visual)
             opts = dict(opts)
             title = read_visual_source(analysis_id).get('title', '')
-            opts['transcript_full_text'] += '\n\nTítulo original de la fuente (no verificado):\n' + title + '\n\nFotogramas (muestreo parcial):\n' + visual_text
+            opts['transcript_full_text'] += '\n\nTítulo original de la fuente (no verificado):\n' + title + ('\n\nTodas las diapositivas del carrusel:\n' if carousel else '\n\nFotogramas (muestreo parcial):\n') + visual_text
+            if carousel:
+                opts['custom_prompt'] += ' Es un carrusel sin transcripción: usa solo las diapositivas, cita el número de diapositiva y considera todas. No inventes audio ni marcas de tiempo.'
+                prompt = build_analysis_prompt(analysis_type='custom', full_text=opts['transcript_full_text'],
+                                               custom_prompt=opts['custom_prompt'], output_language=opts.get('output_language', ''))
+                _persist(analysis_id, prompt=prompt)
+                push_event(job_id, 'running', 0.7, 'Extrayendo conceptos de todas las diapositivas...')
+                endpoint = target.base_url.removesuffix('/v1').rstrip('/') + '/api/chat'
+                response = _req.post(endpoint, json={'model': target.model_name, 'stream': False, 'think': False,
+                                     'options': {'num_ctx': max(context_tokens, 8192), 'num_predict': max(target.max_output_tokens, 2200)},
+                                     'messages': [{'role': 'user', 'content': prompt}]}, timeout=600)
+                response.raise_for_status()
+                data = response.json()
+                result = data.get('message', {}).get('content', '').strip()
+                if _cancelled():
+                    _finish_cancelled(job_id, analysis_id, '')
+                    return
+                if not result or data.get('done_reason') == 'length':
+                    raise LLMError('La extracción del carrusel quedó incompleta; vuelve a intentarlo con un contexto mayor.')
+                _persist(analysis_id, text=result, status='done')
+                push_event(job_id, 'done', 1.0, 'Analysis complete.', data={'result_text': result, 'analysis_id': analysis_id})
+                append_job_log(job_id, 'INFO', 'Carousel analysis finished successfully')
+                return
         full_text = opts["transcript_full_text"]
 
         input_budget = max(

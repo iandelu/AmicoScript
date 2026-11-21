@@ -13,6 +13,37 @@ import { fetchTags } from './tags.js';
 import { applyFilters, escHtml, fmtDur, renderResults } from './transcript.js';
 import { clientLog } from './upload.js';
 
+document.getElementById('carousel-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button');
+  const status = document.getElementById('carousel-status');
+  button.disabled = true;
+  status.textContent = 'Preparando el carrusel…';
+  const data = new FormData();
+  data.append('source_url', document.getElementById('carousel-url').value.trim());
+  try {
+    const response = await fetch('/api/carousels', {method: 'POST', body: data});
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.detail || 'No se pudo iniciar.');
+    status.textContent = 'Analizando todas las imágenes en local; puede tardar varios minutos…';
+    const stream = new EventSource(`/api/jobs/${job.job_id}/stream`);
+    stream.onmessage = async event => {
+      const update = JSON.parse(event.data);
+      if (update.status === 'done') {
+        stream.close(); button.disabled = false;
+        status.textContent = 'Análisis terminado.';
+        const result = await fetch(`/api/recordings/${job.recording_id}`);
+        if (result.ok) await openRecording(await result.json(), false, job.analysis_id);
+      } else if (update.status === 'error' || update.status === 'cancelled') {
+        stream.close(); button.disabled = false;
+        status.textContent = `No se pudo completar: ${update.message || update.status}`;
+        fetchLibrary();
+      }
+    };
+    stream.onerror = () => { stream.close(); button.disabled = false; status.textContent = 'Conexión interrumpida. Consulta la biblioteca para ver el resultado.'; };
+  } catch (error) { button.disabled = false; status.textContent = error.message; }
+});
+
 async function loadSavedIdeas() {
   const list = document.getElementById('saved-ideas-list');
   if (!list) return;
@@ -634,6 +665,10 @@ export async function openRecording(rec, silent = false, analysisId = '') {
     state.jobId = null;
     state.recordingId = rec.id;
     const result = trData.json_data;
+    if (rec.source === 'carousel') {
+      result.speakers = result.speakers || [];
+      result.num_segments = result.num_segments || 0;
+    }
     result.filename = rec.filename;
     state.result = result;
     state.audioUrl = URL.createObjectURL(audioBlob);

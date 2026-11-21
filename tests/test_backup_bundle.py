@@ -46,6 +46,29 @@ def test_export_includes_audio_when_asked(client, make_recording, sample_segment
         assert bundle.read(f"audio/{rec_id}/original.mp3") == b"ID3fake-audio-bytes"
 
 
+def test_export_and_restore_visual_evidence(client, make_recording, tmp_path, monkeypatch):
+    import config
+    from db import new_session
+    from models import Analysis
+    from core.visual_ideas import save_visual_evidence
+    monkeypatch.setattr(config, 'STORAGE_ROOT', tmp_path)
+    rec_id = make_recording()
+    analysis_id = '4af6493e-ef0a-4829-8fcf-788f66a70511'
+    with new_session() as session:
+        session.add(Analysis(id=analysis_id, recording_id=rec_id, analysis_type='custom', status='done'))
+        session.commit()
+    save_visual_evidence(analysis_id, [{'slide': 1, 'description': 'Una idea', 'image': b'image-data'}])
+    with _export(client, include_audio=True) as bundle:
+        assert bundle.read(f'visual-evidence/{analysis_id}/0.jpg') == b'image-data'
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, 'w') as copy:
+            for info in bundle.infolist():
+                copy.writestr(info, bundle.read(info))
+    (tmp_path / 'visual-evidence' / analysis_id / '0.jpg').unlink()
+    assert _import(client, raw.getvalue()).status_code == 200
+    assert (tmp_path / 'visual-evidence' / analysis_id / '0.jpg').read_bytes() == b'image-data'
+
+
 def test_export_can_be_limited_to_selected_recordings(
     client, make_recording, sample_segments
 ):

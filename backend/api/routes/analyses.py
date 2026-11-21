@@ -17,6 +17,41 @@ from sqlmodel import Session, select
 router = APIRouter()
 
 
+@router.post('/api/carousels')
+async def create_carousel(source_url: str = Form(...), session: Session = Depends(get_session)):
+    from core.visual_ideas import is_tiktok_carousel
+    import config
+    import wave
+    if not is_tiktok_carousel(source_url.strip()):
+        raise HTTPException(400, 'Introduce un enlace público de carrusel de TikTok (/photo/).')
+    rec = Recording(filename='Carrusel TikTok ' + source_url.strip().split('/photo/')[1].split('?')[0].strip('/'),
+                    file_path='', source='carousel', status='done', duration=0)
+    directory = config.RECORDINGS_DIR / rec.id
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / 'original.wav'
+    with wave.open(str(path), 'wb') as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b'\0\0' * 8000)
+    rec.file_path = str(path)
+    transcript = Transcript(recording_id=rec.id, full_text='', json_data=json.dumps({'segments': [], 'speakers': [], 'num_segments': 0, 'language': '', 'duration': 0}))
+    session.add(rec)
+    session.add(transcript)
+    session.commit()
+    try:
+        job = await create_analysis(recording_id=rec.id, analysis_type='visual_ideas', source_url=source_url,
+                                    target_language='', custom_prompt='', output_language='', session=session)
+    except Exception:
+        session.delete(transcript)
+        session.delete(rec)
+        session.commit()
+        path.unlink(missing_ok=True)
+        directory.rmdir()
+        raise
+    return {**job, 'recording_id': rec.id}
+
+
 @router.get('/api/ideas/approved')
 def list_approved_ideas(session: Session = Depends(get_session)):
     from core.idea_review import parse_ideas
@@ -250,4 +285,4 @@ def get_visual_source(recording_id: str, analysis_id: str, session: Session = De
     source = read_visual_source(analysis_id)
     match = re.search(r'Fuente facilitada por el usuario: (https://\S+)', analysis.prompt_used or '')
     url = source.get('url') or (match.group(1) if match else '')
-    return {'url': url if validate_source_url(url) else '', 'has_video': bool(visual_video_path(analysis_id))}
+    return {'url': url if validate_source_url(url) else '', 'has_video': bool(visual_video_path(analysis_id)), 'kind': source.get('kind', 'video')}

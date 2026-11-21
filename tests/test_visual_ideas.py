@@ -63,6 +63,40 @@ def test_frame_times_cover_video_without_sampling_after_end():
     assert frame_times(0, count=3) == []
 
 
+def test_carousel_evidence_keeps_all_slides(tmp_path, monkeypatch):
+    import config
+    from core.visual_ideas import save_visual_evidence, read_visual_evidence, visual_frame_path
+    monkeypatch.setattr(config, 'STORAGE_ROOT', tmp_path)
+    analysis_id = '4af6493e-ef0a-4829-8fcf-788f66a70511'
+    frames = [{'slide': i + 1, 'description': f'Slide {i + 1}', 'image': b'jpeg-test'} for i in range(8)]
+    save_visual_evidence(analysis_id, frames)
+    assert [f['slide'] for f in read_visual_evidence(analysis_id)] == list(range(1, 9))
+    assert visual_frame_path(analysis_id, 7).read_bytes() == b'jpeg-test'
+
+
+def test_carousel_source_requires_supported_tiktok_photo_url():
+    from core.visual_ideas import is_tiktok_carousel
+    assert is_tiktok_carousel('https://www.tiktok.com/@ux_dose/photo/7701505287403900180')
+    assert not is_tiktok_carousel('https://www.tiktok.com/@ux_dose/video/123')
+    assert not is_tiktok_carousel('https://tiktok.com.attacker.test/@x/photo/123')
+
+
+def test_carousel_creates_independent_library_recording(client, monkeypatch, tmp_path):
+    import config
+    import api.routes.analyses as routes
+    monkeypatch.setattr(config, 'RECORDINGS_DIR', tmp_path)
+    monkeypatch.setattr(routes, 'create_analysis_job', lambda **kwargs: ('test-job', 'test-analysis'))
+    client.post('/api/llm/settings', data={'llm_provider': 'ollama', 'llm_base_url': 'http://localhost:11434', 'llm_model_name': 'test'})
+    invalid = client.post('/api/carousels', data={'source_url': 'https://example.com/photo/123'})
+    assert invalid.status_code == 400
+    result = client.post('/api/carousels', data={'source_url': 'https://www.tiktok.com/@ux_dose/photo/7701505287403900180'})
+    assert result.status_code == 200
+    recording_id = result.json()['recording_id']
+    assert client.get(f'/api/recordings/{recording_id}').json()['source'] == 'carousel'
+    assert client.get(f'/api/recordings/{recording_id}/transcript').json()['json_data']['speakers'] == []
+    assert (tmp_path / recording_id / 'original.wav').is_file()
+
+
 def test_only_supported_public_video_hosts_are_allowed():
     assert validate_source_url('https://www.youtube.com/watch?v=abc')
     assert validate_source_url('https://vm.tiktok.com/abc')

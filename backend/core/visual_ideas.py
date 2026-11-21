@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import uuid
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -29,7 +30,7 @@ def save_visual_evidence(analysis_id, frames):
     metadata = []
     for index, frame in enumerate(frames):
         (directory / f'{index}.jpg').write_bytes(frame['image'])
-        metadata.append({'second': frame['second'], 'description': frame['description']})
+        metadata.append({**({'slide': frame['slide']} if 'slide' in frame else {'second': frame['second']}), 'description': frame['description']})
     (directory / 'frames.json').write_text(json.dumps(metadata, ensure_ascii=False), encoding='utf-8')
 
 
@@ -39,7 +40,7 @@ def read_visual_evidence(analysis_id):
 
 
 def visual_frame_path(analysis_id, index):
-    if index < 0 or index >= 3:
+    if index < 0 or index >= 100:
         raise ValueError('Invalid frame index')
     return _evidence_dir(analysis_id) / f'{index}.jpg'
 
@@ -54,6 +55,52 @@ def validate_source_url(url):
         return parsed.scheme == 'https' and parsed.hostname in _HOSTS and not parsed.username and not parsed.password and parsed.port in (None, 443)
     except ValueError:
         return False
+
+
+def is_tiktok_carousel(url):
+    if not validate_source_url(url):
+        return False
+    parsed = urlparse(url)
+    return parsed.hostname in {'tiktok.com', 'www.tiktok.com', 'm.tiktok.com'} and bool(re.fullmatch(r'/@[^/]+/photo/\d+/?', parsed.path))
+
+
+def collect_carousel_evidence(url, cancelled=lambda: False, analysis_id=None):
+    if not is_tiktok_carousel(url):
+        raise ValueError('Use a public TikTok photo carousel URL.')
+    endpoint = os.environ.get('ATLAS_OLLAMA_URL', 'http://host.docker.internal:11434')
+    if urlparse(endpoint).hostname not in {'localhost', '127.0.0.1', 'host.docker.internal'}:
+        raise ValueError('Visual analysis requires a local Ollama endpoint.')
+    model = os.environ.get('ATLAS_VISION_MODEL', 'gemma4:e4b')
+    with tempfile.TemporaryDirectory(prefix='amicoscript-carousel-') as tmp:
+        subprocess.run(['gallery-dl', '--ignore-config', '--filter', "extension in ('jpg', 'jpeg', 'png', 'webp')",
+                        '--filename', '{num:03}.{extension}', '-D', tmp, url], check=True,
+                       capture_output=True, timeout=300)
+        slides = sorted(p for p in Path(tmp).iterdir() if p.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'})
+        if not slides:
+            raise RuntimeError('No se pudieron recuperar las imágenes del carrusel; puede ser privado o TikTok haber limitado el acceso.')
+        if len(slides) > 100:
+            raise RuntimeError('El carrusel supera el límite de 100 imágenes.')
+        evidence = []
+        for i, slide in enumerate(slides):
+            if cancelled():
+                raise RuntimeError('Visual analysis cancelled.')
+            image = Path(tmp) / f'converted-{i}.jpg'
+            subprocess.run(['ffmpeg', '-loglevel', 'error', '-i', str(slide), '-frames:v', '1', '-y', str(image)],
+                           check=True, timeout=60, capture_output=True)
+            payload = {'model': model, 'stream': False, 'think': False, 'options': {'num_predict': 350},
+                       'messages': [{'role': 'user', 'content': 'Transcribe literalmente el texto legible y describe solo información visible útil. Si algo no se lee, indícalo. No inventes.',
+                                     'images': [base64.b64encode(image.read_bytes()).decode('ascii')]}]}
+            response = requests.post(endpoint.rstrip('/') + '/api/chat', json=payload, timeout=180)
+            response.raise_for_status()
+            description = response.json().get('message', {}).get('content', '').strip()
+            if not description:
+                raise RuntimeError(f'El modelo no devolvió texto para la diapositiva {i + 1}.')
+            evidence.append({'slide': i + 1, 'description': description, 'image': image.read_bytes()})
+        if analysis_id:
+            directory = _evidence_dir(analysis_id)
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / 'source.json').write_text(json.dumps({'url': url, 'kind': 'carousel'}), encoding='utf-8')
+        return evidence
 
 
 def frame_times(duration, count=3):

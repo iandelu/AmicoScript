@@ -22,6 +22,7 @@ import json
 import tempfile
 import time
 import zipfile
+import uuid
 from pathlib import Path
 from typing import Iterable
 
@@ -150,6 +151,16 @@ def export_library(
                         arcname=f"audio/{rec['id']}/{audio_path.name}",
                         compress_type=zipfile.ZIP_STORED,
                     )
+                for analysis in data['analyses']:
+                    try:
+                        analysis_id = str(uuid.UUID(analysis['id']))
+                    except (ValueError, TypeError):
+                        continue
+                    directory = config.STORAGE_ROOT / 'visual-evidence' / analysis_id
+                    if directory.is_dir():
+                        for item in directory.iterdir():
+                            if item.is_file() and (item.name in {'frames.json', 'source.json', 'video.mp4', 'video.webm', 'video.mkv'} or (item.suffix == '.jpg' and item.stem.isdigit() and int(item.stem) < 100)):
+                                bundle.write(item, arcname=f'visual-evidence/{analysis_id}/{item.name}', compress_type=zipfile.ZIP_STORED)
     except Exception:
         tmp_path.unlink(missing_ok=True)
         raise
@@ -248,6 +259,7 @@ async def import_library(
             data = _read_bundle_json(bundle, "data.json", MAX_DATA_BYTES)
             counts = _import_rows(session, data, mode)
             counts["audio"] = _restore_audio(bundle, session, config.RECORDINGS_DIR, mode)
+            counts['visual_evidence'] = _restore_visual_evidence(bundle, session, mode)
 
         session.commit()
         return {"ok": True, "imported": counts, "mode": mode}
@@ -342,4 +354,32 @@ def _restore_audio(
         session.add(rec)
         restored += 1
 
+    return restored
+
+
+def _restore_visual_evidence(bundle: zipfile.ZipFile, session: Session, mode: str) -> int:
+    restored = 0
+    for info in bundle.infolist():
+        if not info.filename.startswith('visual-evidence/'):
+            continue
+        rel = _safe_member_path(info.filename)
+        if rel is None or len(rel.parts) != 3 or info.file_size > 300 * 1024 * 1024:
+            continue
+        try:
+            analysis_id = str(uuid.UUID(rel.parts[1]))
+        except ValueError:
+            continue
+        name = rel.parts[2]
+        if not (name in {'frames.json', 'source.json', 'video.mp4', 'video.webm', 'video.mkv'} or (name.endswith('.jpg') and name[:-4].isdigit() and int(name[:-4]) < 100)):
+            continue
+        if not session.get(Analysis, analysis_id) or (info.compress_size and info.file_size / max(info.compress_size, 1) > MAX_COMPRESSION_RATIO):
+            continue
+        dest = config.STORAGE_ROOT / 'visual-evidence' / analysis_id / name
+        if dest.exists() and mode != 'overwrite':
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with bundle.open(info) as src, open(dest, 'wb') as out:
+            while chunk := src.read(1024 * 1024):
+                out.write(chunk)
+        restored += 1
     return restored

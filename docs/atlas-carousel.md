@@ -1,0 +1,7 @@
+# Carruseles de TikTok en el prototipo Atlas
+
+En **Library**, pega un enlace público de TikTok con formato `/@usuario/photo/id` y pulsa **Analizar carrusel**. Se recuperan las imágenes con `gallery-dl`, se leen en orden con Ollama local y se proponen conceptos con la diapositiva como evidencia. La revisión de cada idea es manual. El prototipo no transcribe la pista de audio del carrusel.
+
+La dependencia `gallery-dl` se instala desde `backend/requirements.txt` en la imagen Docker normal. Se necesita acceso de red a TikTok y un servidor Ollama accesible desde el contenedor; `ATLAS_OLLAMA_URL` y `ATLAS_VISION_MODEL` permiten configurar el servicio y el modelo visual. El análisis de ideas utiliza la configuración LLM local de la aplicación. Los cambios de TikTok, las restricciones de acceso y el coste de memoria del modelo pueden impedir el análisis.
+
+Los resultados y las decisiones están en SQLite; las imágenes se guardan en el volumen de datos de AmicoScript bajo `visual-evidence`. La exportación de la biblioteca con archivos incluye imágenes y metadatos visuales, además de los datos y decisiones; importa el ZIP desde Backup para restaurarlos. La exportación sin archivos es solo de metadatos y no incluye las imágenes. Esta copia de AmicoScript no constituye todavía el mecanismo completo de exportación del cerebro de AtlasOS ni el despliegue de un único comando de DEC-001 y DEC-003.
