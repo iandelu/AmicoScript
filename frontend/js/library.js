@@ -13,6 +13,47 @@ import { fetchTags } from './tags.js';
 import { applyFilters, escHtml, fmtDur, renderResults } from './transcript.js';
 import { clientLog } from './upload.js';
 
+async function loadSavedIdeas() {
+  const list = document.getElementById('saved-ideas-list');
+  if (!list) return;
+  try {
+    const response = await fetch('/api/ideas/approved');
+    if (!response.ok) throw new Error('No se pudieron cargar las ideas.');
+    const ideas = await response.json();
+    list.replaceChildren();
+    if (!ideas.length) {
+      list.textContent = 'Aún no has aprobado ninguna idea.';
+      list.classList.add('text-sm', 'text-slate-500');
+      return;
+    }
+    for (const idea of ideas) {
+      const card = document.createElement('article');
+      card.className = 'rounded-lg border border-slate-200 p-3';
+      const title = document.createElement('h3');
+      title.className = 'font-semibold text-sm text-slate-900';
+      title.textContent = idea.title;
+      const body = document.createElement('p');
+      body.className = 'text-sm text-slate-600 mt-1 whitespace-pre-line';
+      body.textContent = idea.body.replace(/\*\*/g, '');
+      const source = document.createElement('button');
+      source.type = 'button';
+      source.className = 'text-xs text-violet-700 underline mt-2 text-left';
+      source.textContent = `Abrir fuente: ${idea.recording_name}`;
+      source.addEventListener('click', async () => {
+        try {
+          const response = await fetch(`/api/recordings/${idea.recording_id}`);
+          if (!response.ok) throw new Error('No se encontró la grabación.');
+          await openRecording(await response.json(), false, idea.analysis_id);
+        } catch (error) { showError(error.message); }
+      });
+      card.append(title, body, source);
+      list.append(card);
+    }
+  } catch (error) {
+    list.textContent = error.message;
+  }
+}
+
 function getVisibleFolders() {
   const all = state.library.folders;
   const byParent = {};
@@ -32,6 +73,7 @@ function getVisibleFolders() {
 }
 
 export async function fetchLibrary() {
+  loadSavedIdeas();
   const params = new URLSearchParams({ sort: state.library.sort, order: state.library.order, limit: '100' });
   if (state.library.selectedFolderId) params.set('folder_id', state.library.selectedFolderId);
   if (state.library.selectedTagId) params.set('tag_id', state.library.selectedTagId);
@@ -572,7 +614,7 @@ export async function loadRecording(id) {
   }
 }
 
-export async function openRecording(rec, silent = false) {
+export async function openRecording(rec, silent = false, analysisId = '') {
   if (rec.status !== 'done') {
     if (!silent) alert(`This recording has status "${rec.status}" and cannot be opened yet.`);
     return false;
@@ -621,7 +663,7 @@ export async function openRecording(rec, silent = false) {
     if (_legacyPast) _legacyPast.classList.add('hidden');
 
     renderResults();
-    loadIdeaReview(rec.id);
+    loadIdeaReview(rec.id, analysisId);
 
     const transcriptBtn = document.getElementById('tab-btn-transcript');
     transcriptBtn.disabled = false;

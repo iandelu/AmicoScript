@@ -12,7 +12,7 @@ async function json(url, options) {
   return response.json();
 }
 
-export async function loadIdeaReview(recordingId) {
+export async function loadIdeaReview(recordingId, analysisId = '') {
   currentRecording = recordingId;
   if (stream) { stream.close(); stream = null; }
   const root = document.getElementById('idea-review');
@@ -50,6 +50,10 @@ export async function loadIdeaReview(recordingId) {
     } catch (error) { button.disabled = false; message.textContent = `No se pudo iniciar: ${error.message}`; }
   });
   try {
+    if (analysisId) {
+      await showAnalysis(root, recordingId, analysisId);
+      return;
+    }
     const analyses = await json(`/api/recordings/${recordingId}/analyses`);
     for (const analysis of analyses.filter(a => a.status === 'done')) {
       const frames = await json(`/api/recordings/${recordingId}/analyses/${analysis.id}/frames`);
@@ -70,7 +74,7 @@ async function showAnalysis(root, recordingId, analysisId, frames) {
   const video = source.has_video ? `<video class="w-full max-h-96 rounded-lg bg-slate-900" controls playsinline preload="metadata" src="${base}/video"></video>` : `<p class="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">Este análisis anterior no guardó el vídeo. Analiza de nuevo el enlace para verlo aquí.</p>`;
   content.innerHTML = `<div class="grid gap-5 mt-4 lg:grid-cols-2"><div><h3 class="text-sm font-semibold text-slate-800 mb-2">Vídeo</h3>${video}${source.url ? `<a class="inline-block mt-2 text-sm text-violet-700 underline" href="${escHtml(source.url)}" target="_blank" rel="noopener noreferrer">Abrir vídeo original ↗</a>` : ''}<h3 class="text-sm font-semibold text-slate-800 mt-4 mb-2">Fotogramas analizados</h3><div class="grid grid-cols-3 gap-2">${visualFrames.map((f, i) => `<figure><img class="w-full aspect-video object-cover rounded-lg bg-slate-100" src="${base}/frames/${i}" alt="Fotograma en ${Math.round(f.second)} segundos" /><figcaption class="text-xs text-slate-500 mt-1">${Math.floor(f.second / 60)}:${String(Math.floor(f.second % 60)).padStart(2, '0')}</figcaption></figure>`).join('')}</div></div><div><h3 class="text-sm font-semibold text-slate-800 mb-2">Ideas · ${ideas.length}</h3><div id="review-ideas" class="space-y-3"></div></div></div>`;
   const list = content.querySelector('#review-ideas');
-  if (!ideas.length) list.innerHTML = '<p class="text-sm text-slate-500">No se encontraron ideas separadas en este análisis. Puedes volver a analizar el vídeo.</p>';
+  if (!ideas.length) list.innerHTML = '<p class="text-sm text-slate-500">No hay ideas reutilizables propuestas en este análisis.</p>';
   for (const idea of ideas) {
     const card = document.createElement('article');
     card.className = 'rounded-lg border border-slate-200 p-4';

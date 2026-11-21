@@ -81,7 +81,7 @@ def video_duration(info, video):
     return float(result.stdout.strip())
 
 
-def save_visual_video(analysis_id, video, source_url):
+def save_visual_video(analysis_id, video, source_url, title=''):
     video = Path(video)
     if video.suffix.lower() not in {'.mp4', '.webm', '.mkv'}:
         raise ValueError('Unsupported video format')
@@ -89,7 +89,7 @@ def save_visual_video(analysis_id, video, source_url):
     directory.mkdir(parents=True, exist_ok=True)
     name = 'video' + video.suffix.lower()
     shutil.copyfile(video, directory / name)
-    (directory / 'source.json').write_text(json.dumps({'url': source_url, 'video': name}), encoding='utf-8')
+    (directory / 'source.json').write_text(json.dumps({'url': source_url, 'video': name, 'title': title}), encoding='utf-8')
 
 
 def read_visual_source(analysis_id):
@@ -147,5 +147,5 @@ def collect_visual_evidence(url, cancelled=lambda: False, analysis_id=None):
                 raise RuntimeError('The vision model returned an empty description.')
             evidence.append({'second': second, 'description': description, 'image': image.read_bytes()})
         if analysis_id:
-            save_visual_video(analysis_id, video, url)
+            save_visual_video(analysis_id, video, url, str(info.get('title') or ''))
         return evidence

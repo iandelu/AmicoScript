@@ -22,11 +22,16 @@ def test_approval_is_independent_persistent_and_reversible(client, make_recordin
     ideas = client.get(base).json()
     assert len(ideas) == 2
     assert client.put(f"{base}/{ideas[0]['id']}", json={'status': 'approved'}).status_code == 200
+    saved = client.get('/api/ideas/approved').json()
+    assert len(saved) == 1
+    assert saved[0]['title'] == 'Uno'
+    assert saved[0]['recording_id'] == recording_id
     updated = client.get(base).json()
     assert [i['status'] for i in updated] == ['approved', 'pending']
     assert client.put(f"{base}/{ideas[0]['id']}", json={'status': 'rejected'}).status_code == 200
     assert client.get(base).json()[0]['status'] == 'rejected'
     assert client.put(f"{base}/{ideas[0]['id']}", json={'status': 'pending'}).status_code == 200
+    assert client.get('/api/ideas/approved').json() == []
     assert client.get(base).json()[0]['status'] == 'pending'
     assert client.put(f"{base}/unknown", json={'status': 'approved'}).status_code == 404
     assert client.put(f"{base}/{ideas[0]['id']}", json={'status': 'wrong'}).status_code == 422

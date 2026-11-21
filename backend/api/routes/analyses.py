@@ -17,6 +17,25 @@ from sqlmodel import Session, select
 router = APIRouter()
 
 
+@router.get('/api/ideas/approved')
+def list_approved_ideas(session: Session = Depends(get_session)):
+    from core.idea_review import parse_ideas
+    decisions = session.exec(select(IdeaDecision).where(IdeaDecision.status == 'approved')).all()
+    results = []
+    for decision in decisions:
+        analysis = session.get(Analysis, decision.analysis_id)
+        if not analysis:
+            continue
+        recording = session.get(Recording, analysis.recording_id)
+        if not recording:
+            continue
+        idea = next((item for item in parse_ideas(analysis.id, analysis.result_text) if item['id'] == decision.idea_id), None)
+        if idea:
+            results.append({**idea, 'recording_id': recording.id, 'recording_name': recording.alias or recording.filename,
+                            'analysis_id': analysis.id})
+    return results
+
+
 @router.post("/api/recordings/{recording_id}/analyses")
 async def create_analysis(
     recording_id: str,
@@ -67,12 +86,19 @@ async def create_analysis(
             transcript_text = transcript_with_timestamps(json.loads(tr.json_data), tr.full_text)
         except (ValueError, TypeError):
             transcript_text = tr.full_text
-        custom_prompt = ('Extrae ideas distintas y realmente útiles, no un resumen. Cada idea debe ocupar como máximo 5 a 10 líneas, '
-                         'con título breve y una sola frase concreta de máximo 30 palabras; añade cuándo usarla solo si aporta valor. Indica marcas temporales de audio '
-                         'o fotogramas como evidencia; distingue lo dicho de lo visible y no inventes. Los fotogramas '
-                         'son solo tres muestras y no representan todo el vídeo. Atribuye las afirmaciones al vídeo, '
-                         'no las presentes como hechos comprobados. No inventes nombres, cifras, siglas ni usos. '
-                         'Usa un encabezado Markdown por idea y omite introducción y conclusiones. '
+        custom_prompt = ('Actúa como editor de una biblioteca personal de conocimiento. Extrae solo conceptos, métodos, '
+                         'heurísticas o herramientas concretas que una persona pueda reutilizar en otro contexto. '
+                         'No resumas el vídeo ni conviertas cada dato, noticia, demostración, cifra o característica de producto en una idea. '
+                         'Si el contenido no enseña un concepto útil, responde exactamente: Ninguna idea reutilizable. '
+                         'Para cada concepto distinto escribe un encabezado Markdown ## con su nombre, una frase de máximo 25 palabras '
+                         'que explique el concepto y una línea «Cuándo usarlo:» con un caso concreto. Añade una línea «Evidencia:» '
+                         'con la marca temporal y si procede del audio o de una imagen. No inventes aplicaciones. '
+                         'La transcripción puede confundir nombres propios. Compara con el título original y el texto visible: '
+                         'usa la grafía del título o imagen cuando sea clara; si hay discrepancia sin confirmación, '
+                         'escribe «nombre no confirmado» y explica brevemente la duda. No corrijas por suposición. '
+                         'El título y las imágenes son evidencia de la fuente, no una verificación externa de sus afirmaciones. '
+                         'Los fotogramas son solo tres muestras y no representan todo el vídeo. '
+                         'Omite introducción y conclusiones. '
                          'Las ideas son propuestas pendientes de aprobación humana. '
                          f'Fuente facilitada por el usuario: {source_url.strip()}')
         visual_source_url = source_url.strip()

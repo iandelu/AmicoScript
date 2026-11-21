@@ -385,13 +385,14 @@ def process_analysis_job(job_id: str) -> None:
 
         context_tokens = int(opts.get("llm_context_tokens") or 8192)
         if opts.get('visual_source_url'):
-            from core.visual_ideas import collect_visual_evidence, save_visual_evidence
+            from core.visual_ideas import collect_visual_evidence, save_visual_evidence, read_visual_source
             push_event(job_id, 'running', 0.06, 'Analizando fotogramas en local...')
             visual = collect_visual_evidence(opts['visual_source_url'], _cancelled, analysis_id)
             save_visual_evidence(analysis_id, visual)
             visual_text = '\n'.join(f'[{int(item["second"] // 60):02}:{int(item["second"] % 60):02}] {item["description"]}' for item in visual)
             opts = dict(opts)
-            opts['transcript_full_text'] += '\n\nFotogramas (muestreo parcial):\n' + visual_text
+            title = read_visual_source(analysis_id).get('title', '')
+            opts['transcript_full_text'] += '\n\nTítulo original de la fuente (no verificado):\n' + title + '\n\nFotogramas (muestreo parcial):\n' + visual_text
         full_text = opts["transcript_full_text"]
 
         input_budget = max(
